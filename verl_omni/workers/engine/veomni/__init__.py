@@ -12,6 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .diffusion_impl import VeOmniDiffusionEngine
+try:
+    from .diffusion_impl import VeOmniDiffusionEngine
+except ImportError:
+    VeOmniDiffusionEngine = None
 
-__all__ = ["VeOmniDiffusionEngine"]
+try:
+    from .qwen3_omni_thinker_impl import Qwen3OmniThinkerVeOmniEngine
+except ImportError:
+    Qwen3OmniThinkerVeOmniEngine = None
+
+
+__all__ = ["Qwen3OmniThinkerVeOmniEngine", "VeOmniDiffusionEngine"]

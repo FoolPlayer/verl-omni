@@ -361,6 +361,52 @@ binary `<answer>` exact-match reward): `critic/rewards/mean` rose from ~0.73 to
 ~0.94, `val-core/avqa_r1_6k/reward/mean@1` reached **0.877**.
 `rollout_corr/log_ppl_diff` stayed near zero (~0.007).
 
+## VeOmni full-parameter Thinker training
+
+[`run_qwen3_omni_thinker_gspo_veomni.sh`](qwen3_omni/run_qwen3_omni_thinker_gspo_veomni.sh)
+uses the V1 omni trainer with VeOmni **0.1.12** (PyPI), FSDP2 and expert
+parallelism for the actor/reference, and vLLM-Omni for text rollout. Install
+VeOmni on every node following the [installation guide](../../docs/start/install.md#optional-engine-backends).
+The recipe uses the MMK12 parquet files prepared above.
+
+```bash
+MODEL_PATH=Qwen/Qwen3-Omni-30B-A3B-Instruct \
+TRAIN_FILE=$HOME/data/mmk12/train.parquet \
+VAL_FILE=$HOME/data/mmk12/test.parquet \
+NUM_GPUS=8 NNODES=2 ACTOR_EP=8 \
+bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_veomni.sh
+```
+
+The Ray cluster must already span the requested nodes. The full text backbone
+is trainable; vision/audio encoders remain frozen and Talker/Code2Wav are not
+constructed. This backend currently accepts **text and image inputs**, with
+`use_remove_padding=true` and `ulysses_parallel_size=1`. Audio/video inputs,
+LoRA and Talker training are rejected. Prompt-only modality masks prevent
+placeholder tokens sampled into a response from consuming image features.
+Fused expert weights are expanded to per-expert weights during rollout updates.
+
+Defaults use rollout TP=2 and actor EP=8; EP must divide the GPU world size and
+expert count. `MOE_IMPL=fused_triton` selects VeOmni's Triton MoE backend when
+needed. Hydra overrides go last, for example `trainer.total_training_steps=2`
+or `--cfg job` to inspect the composed configuration. The learning-rate
+schedule uses the supported `lr_warmup_steps_ratio` option; evaluation sets
+`temperature=0.0` explicitly. This recipe does not claim numerical equivalence
+to the NPU run in PR #231 or the LoRA curves above.
+
+Two-GPU end-to-end smoke test (tiny random checkpoint, no external model download):
+
+```bash
+bash tests/special_e2e/run_gspo_qwen3_omni_thinker_veomni_smoke.sh
+```
+
+The backend check also exercises image inputs on one rank while another rank
+receives text, two optimizer updates with EP=2, and exact agreement of exported
+weights across ranks:
+
+```bash
+torchrun --standalone --nproc_per_node=2 tests/special_e2e/check_qwen3_omni_veomni_backend.py
+```
+
 ## Logging
 
 W&B logging is enabled by default:
