@@ -18,9 +18,9 @@ except ImportError:
     VeOmniDiffusionEngine = None
 
 try:
-    from .qwen3_omni_thinker_impl import Qwen3OmniThinkerVeOmniEngine
+    from .omni_impl import OmniVeOmniEngine
 except ImportError:
-    Qwen3OmniThinkerVeOmniEngine = None
+    OmniVeOmniEngine = None
 
 
-__all__ = ["Qwen3OmniThinkerVeOmniEngine", "VeOmniDiffusionEngine"]
+__all__ = ["OmniVeOmniEngine", "VeOmniDiffusionEngine"]
