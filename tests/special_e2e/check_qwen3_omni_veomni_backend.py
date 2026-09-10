@@ -34,7 +34,7 @@ from veomni.models.auto import build_foundation_model
 from verl.trainer.config import CheckpointConfig
 from verl.workers.config import VeOmniEngineConfig, VeOmniOptimizerConfig
 
-from verl_omni.workers.engine.veomni.qwen3_omni_thinker_impl import Qwen3OmniThinkerVeOmniEngine
+from verl_omni.workers.engine.veomni.omni_impl import OmniVeOmniEngine
 
 
 def _build_checkpoint(path):
@@ -70,6 +70,7 @@ def run(path: Path, moe_implementation: str):
     dist.barrier()
     config = AutoConfig.from_pretrained(path)
     model_config = SimpleNamespace(
+        architecture=config.architectures[0],
         hf_config=config,
         model_stage="thinker",
         lora_rank=0,
@@ -80,7 +81,7 @@ def run(path: Path, moe_implementation: str):
         enable_gradient_checkpointing=True,
         enable_activation_offload=False,
     )
-    engine = Qwen3OmniThinkerVeOmniEngine(
+    engine = OmniVeOmniEngine(
         model_config=model_config,
         engine_config=VeOmniEngineConfig(
             expert_parallel_size=2, attn_implementation="sdpa", moe_implementation=moe_implementation

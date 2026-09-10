@@ -19,11 +19,12 @@ from pathlib import Path
 import torch
 from tensordict import TensorDict
 
-_PATH = Path(__file__).resolve().parents[2] / "verl_omni/workers/engine/packed_prompt_region.py"
-_spec = importlib.util.spec_from_file_location("packed_prompt_region", _PATH)
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-build_prompt_region_mask = _module.build_prompt_region_mask
+# Load the CPU helpers without importing optional rollout packages.
+_path = Path(__file__).resolve().parents[2] / "verl_omni/pipelines/qwen3_omni/veomni.py"
+_spec = importlib.util.spec_from_file_location("qwen3_omni_veomni_helpers", _path)
+adapter = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(adapter)
+build_prompt_region_mask = adapter._build_prompt_region_mask
 
 
 def _packed_batch(sequences, response_lengths):

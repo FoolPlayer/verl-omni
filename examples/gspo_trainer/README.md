@@ -356,6 +356,26 @@ parallelism for the actor/reference, and vLLM-Omni for text rollout. Install
 VeOmni on every node following the [installation guide](../../docs/start/install.md#optional-engine-backends).
 The recipe uses the MMK12 parquet files prepared above.
 
+Both FSDP and VeOmni use `verl_omni.trainer.main_omni` and the same
+`OmniModelBase` registry keyed by `(architecture, model_stage)`.
+`model_engine=veomni` selects the shared `OmniVeOmniEngine`; the registered
+`Qwen3OmniThinkerAdapter` supplies model-specific behavior. Adding another
+architecture does not require a new engine class or engine registration.
+
+To support VeOmni in an existing training adapter, override these hooks:
+
+| Hook | Responsibility |
+| --- | --- |
+| `setup_veomni(model_config, engine_config)` | Opt in, validate supported settings before model loading, and install backend integrations such as weight-export handlers. |
+| `prepare_veomni_inputs(model_inputs, micro_batch, model_config)` | Adapt packed inputs after verl's VeOmni transforms; defaults to passthrough. |
+| `configure_veomni_trainable_params(module, model_config)` | Set trainable parameters after parallelization and before optimizer creation; defaults to no-op. |
+
+The existing `prepare_model_inputs` replay hook runs for both backends.
+Keep optional VeOmni imports inside the backend hooks. Adapters that do not
+implement `setup_veomni` fail before model loading; selecting this backend does
+not imply that every registered architecture is supported. Qwen3's helpers,
+including prompt-region masking, live under `pipelines/qwen3_omni/veomni.py`.
+
 ```bash
 MODEL_PATH=Qwen/Qwen3-Omni-30B-A3B-Instruct \
 TRAIN_FILE=$HOME/data/mmk12/train.parquet \

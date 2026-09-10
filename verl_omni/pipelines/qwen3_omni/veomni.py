@@ -26,11 +26,6 @@ from typing import Any
 
 import torch
 from tensordict import TensorDict
-from verl.workers.engine.base import EngineRegistry
-from verl.workers.engine.veomni.transformer_impl import VeOmniEngineWithLMHead
-from verl.workers.engine.veomni.utils import MOE_PARAM_HANDERS
-
-from verl_omni.workers.engine.packed_prompt_region import build_prompt_region_mask
 
 logger = logging.getLogger(__name__)
 
@@ -51,10 +46,6 @@ _MODALITY_TENSOR_KEYS = {
     "video": "pixel_values_videos",
     "audio": "input_features",
 }
-
-
-def _is_qwen3_omni(module: Any) -> bool:
-    return getattr(getattr(module, "config", None), "model_type", None) == _MODEL_TYPE
 
 
 def patch_veomni_causal_mask_kwargs() -> bool:
@@ -209,46 +200,77 @@ def map_qwen3_omni_moe_param(
             yield expert_name, projection[local_expert_idx].contiguous()
 
 
-@EngineRegistry.register(model_type="omni_model", backend="veomni", device="cuda")
-class Qwen3OmniThinkerVeOmniEngine(VeOmniEngineWithLMHead):
-    """VeOmni engine for Qwen3-Omni Thinker with frozen modality towers."""
+def setup_backend(model_config, engine_config) -> None:
+    """Validate the Thinker backend and install its optional integrations."""
+    if model_config.hf_config.model_type != _MODEL_TYPE or model_config.model_stage != "thinker":
+        raise NotImplementedError("The Qwen3-Omni VeOmni adapter supports the Thinker stage only.")
+    if engine_config.ulysses_parallel_size != 1:
+        raise NotImplementedError("Qwen3-Omni Thinker with VeOmni requires ulysses_parallel_size=1.")
+    if not model_config.use_remove_padding:
+        raise NotImplementedError("Qwen3-Omni Thinker with VeOmni requires use_remove_padding=True.")
+    if model_config.lora_rank > 0 or model_config.lora.get("rank", 0) > 0:
+        raise NotImplementedError("Qwen3-Omni Thinker with VeOmni supports full-parameter training only.")
 
-    def _get_model_config_path(self):
-        """Validate supported architecture and install the Transformers compatibility shim."""
-        if self.model_config.hf_config.model_type != _MODEL_TYPE or self.model_config.model_stage != "thinker":
-            raise NotImplementedError("The Omni VeOmni engine currently supports Qwen3-Omni Thinker only.")
-        if self.engine_config.ulysses_parallel_size != 1:
-            raise NotImplementedError("Qwen3-Omni Thinker with VeOmni requires ulysses_parallel_size=1.")
-        if not self.model_config.use_remove_padding:
-            raise NotImplementedError("Qwen3-Omni Thinker with VeOmni requires use_remove_padding=True.")
-        if self.model_config.lora_rank > 0 or self.model_config.lora.get("rank", 0) > 0:
-            raise NotImplementedError("Qwen3-Omni Thinker with VeOmni supports full-parameter training only.")
-        patch_veomni_causal_mask_kwargs()
-        return super()._get_model_config_path()
+    from verl.workers.engine.veomni.utils import MOE_PARAM_HANDERS
 
-    def _apply_veomni_input_transforms(self, model_inputs: dict, micro_batch: TensorDict):
-        """Add masks for prompt placeholders, retaining response token embeddings."""
-        super()._apply_veomni_input_transforms(model_inputs, micro_batch)
-        available = {modality for modality, key in _MODALITY_TENSOR_KEYS.items() if model_inputs.get(key) is not None}
-        unsupported = available - {"image"}
-        if unsupported:
-            raise NotImplementedError(
-                f"Qwen3-Omni Thinker with VeOmni does not support {sorted(unsupported)} inputs yet."
-            )
-        prompt_mask = build_prompt_region_mask(micro_batch, model_inputs["input_ids"].size(-1))
-        if prompt_mask is None:
-            raise ValueError(
-                "Qwen3-Omni VeOmni requires jagged input_ids and response_mask to locate prompt placeholders."
-            )
-        model_inputs.update(
-            build_modality_masks(model_inputs["input_ids"], self.module.config, available, prompt_mask=prompt_mask)
-        )
-
-    def _build_optimizer(self, module):
-        if _is_qwen3_omni(module):
-            frozen = freeze_modality_towers(module)
-            logger.info("Frozen Qwen3-Omni modality towers before optimizer creation: %s", frozen)
-        return super()._build_optimizer(module)
+    patch_veomni_causal_mask_kwargs()
+    MOE_PARAM_HANDERS[_MODEL_TYPE] = map_qwen3_omni_moe_param
 
 
-MOE_PARAM_HANDERS[_MODEL_TYPE] = map_qwen3_omni_moe_param
+def prepare_inputs(model_inputs: dict, micro_batch: TensorDict, model_config) -> dict:
+    """Add masks for prompt placeholders, retaining response token embeddings."""
+    available = {modality for modality, key in _MODALITY_TENSOR_KEYS.items() if model_inputs.get(key) is not None}
+    unsupported = available - {"image"}
+    if unsupported:
+        raise NotImplementedError(f"Qwen3-Omni Thinker with VeOmni does not support {sorted(unsupported)} inputs yet.")
+    prompt_mask = _build_prompt_region_mask(micro_batch, model_inputs["input_ids"].size(-1))
+    if prompt_mask is None:
+        raise ValueError("Qwen3-Omni VeOmni requires jagged input_ids and response_mask to locate prompt placeholders.")
+    model_inputs.update(
+        build_modality_masks(model_inputs["input_ids"], model_config.hf_config, available, prompt_mask=prompt_mask)
+    )
+    return model_inputs
+
+
+def _build_prompt_region_mask(
+    micro_batch: TensorDict,
+    packed_length: int,
+) -> torch.Tensor | None:
+    """Mark the prompt half of every packed sequence, ``(1, packed_length)``.
+
+    Args:
+        micro_batch: the packed batch. ``input_ids`` is jagged over
+            ``prompt + response`` and ``response_mask`` is jagged over
+            ``response`` alone, so their offsets give both lengths.
+        packed_length: width of ``model_inputs["input_ids"]``, i.e. ``total_nnz``
+            plus any right pad added after packing.
+
+    Returns:
+        The boolean mask, or ``None`` when the batch is not jagged or carries no
+        ``response_mask`` (e.g. a pure-inference call), which the training adapter
+        rejects because prompt placeholders cannot be located safely.
+    """
+
+    input_ids = micro_batch.get("input_ids", None)
+    response_mask = micro_batch.get("response_mask", None)
+    if input_ids is None or response_mask is None:
+        return None
+    if not input_ids.is_nested or not response_mask.is_nested:
+        return None
+
+    seq_offsets = input_ids.offsets().to(torch.long)
+    response_offsets = response_mask.offsets().to(device=seq_offsets.device, dtype=torch.long)
+    batch_size = seq_offsets.numel() - 1
+    if batch_size < 1 or response_offsets.numel() - 1 != batch_size:
+        return None
+
+    # Absolute end of each prompt = sequence end - response length.
+    prompt_ends = seq_offsets[1:] - response_offsets.diff()
+
+    positions = torch.arange(packed_length, device=seq_offsets.device)
+    # Which sequence each packed position belongs to. Positions in the trailing
+    # pad land at ``batch_size`` and are dropped by ``in_batch``. Everything
+    # stays in tensor-land so this costs no device sync.
+    sequence_index = torch.searchsorted(seq_offsets[1:].contiguous(), positions, right=True)
+    in_batch = sequence_index < batch_size
+    return (in_batch & (positions < prompt_ends[sequence_index.clamp(max=batch_size - 1)])).unsqueeze(0)
