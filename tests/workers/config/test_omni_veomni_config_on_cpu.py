@@ -29,6 +29,16 @@ from verl.workers.config import VeOmniActorConfig
 
 ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = ROOT / "examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_veomni.sh"
+SMOKE_SCRIPT = ROOT / "tests/special_e2e/run_gspo_qwen3_omni_thinker_veomni_smoke.sh"
+QWEN_OPS_DEFAULTS = {
+    "attn_implementation": "flash_attention_2",
+    "moe_implementation": "fused_triton",
+    "cross_entropy_loss_implementation": "liger_kernel",
+    "rms_norm_implementation": "liger_kernel",
+    "swiglu_mlp_implementation": "liger_kernel",
+    "rotary_pos_emb_implementation": "liger_kernel",
+    "load_balancing_loss_implementation": "triton",
+}
 
 
 @pytest.fixture
@@ -51,14 +61,23 @@ def actor_module():
         yield module
 
 
-def _compose_launcher(tmp_path, extra=()):
+def _compose_launcher(tmp_path, extra=(), script=SCRIPT):
     """Capture the actual shell argv, then compose it with the production YAML."""
     capture = tmp_path / "python3"
-    capture.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+    capture.write_text(
+        f"#!{sys.executable}\nimport json, sys\n"
+        "if sys.argv[1:3] == ['-m', 'verl_omni.trainer.main_omni']:\n"
+        "    print(json.dumps(sys.argv[1:]))\n"
+    )
     capture.chmod(0o755)
     result = subprocess.run(
-        ["bash", str(SCRIPT), *extra],
-        env={**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"},
+        ["bash", str(script), *extra],
+        env={
+            **{k: v for k, v in os.environ.items() if k not in {"MOE_IMPL", "ATTN_IMPL"}},
+            "PATH": f"{tmp_path}:{os.environ['PATH']}",
+            "DATA_DIR": str(tmp_path / "data"),
+            "MODEL_PATH": str(tmp_path / "model"),
+        },
         capture_output=True,
         text=True,
         check=True,
@@ -102,3 +121,44 @@ def test_invalid_omni_trainer_type_is_rejected(actor_module):
         actor_module.OmniVeOmniActorConfig(
             strategy="veomni", rollout_n=2, ppo_micro_batch_size_per_gpu=1, trainer_type="invalid"
         )
+
+
+@pytest.mark.parametrize("script", [SCRIPT, SMOKE_SCRIPT], ids=["launcher", "v1-smoke"])
+def test_launcher_and_smoke_share_native_qwen_ops_defaults(tmp_path, actor_module, script):
+    config = _compose_launcher(tmp_path, script=script)
+    for name, expected in QWEN_OPS_DEFAULTS.items():
+        assert config.actor_rollout_ref.actor.veomni[name] == expected
+        assert config.actor_rollout_ref.ref.veomni[name] == expected
+    actor = omega_conf_to_dataclass(config.actor_rollout_ref.actor)
+    reference = omega_conf_to_dataclass(config.actor_rollout_ref.ref.veomni)
+    # Both configs apply VeOmni's attention/SP normalization on construction.
+    for name in QWEN_OPS_DEFAULTS:
+        assert getattr(actor.engine, name) == getattr(reference, name)
+    assert config.actor_rollout_ref.model.use_fused_kernels
+
+
+def test_reference_tracks_actor_ops_overrides(tmp_path, actor_module):
+    config = _compose_launcher(
+        tmp_path,
+        tuple(f"actor_rollout_ref.actor.veomni.{name}=eager" for name in QWEN_OPS_DEFAULTS),
+    )
+    for name in QWEN_OPS_DEFAULTS:
+        assert config.actor_rollout_ref.ref.veomni[name] == "eager"
+    # Operator selection does not change the requested RL output protocol.
+    assert config.actor_rollout_ref.model.use_fused_kernels
+
+
+def test_reference_ops_can_be_explicitly_overridden(tmp_path, actor_module):
+    config = _compose_launcher(tmp_path, ("actor_rollout_ref.ref.veomni.moe_implementation=fused_quack",))
+    assert config.actor_rollout_ref.actor.veomni.moe_implementation == "fused_triton"
+    assert config.actor_rollout_ref.ref.veomni.moe_implementation == "fused_quack"
+
+
+def test_qwen_ops_defaults_match_installed_veomni():
+    from dataclasses import fields
+
+    veomni_args = pytest.importorskip("veomni.arguments")
+    # Read raw defaults, before hardware/SP normalization in __post_init__.
+    native_defaults = {field.name: field.default for field in fields(veomni_args.OpsImplementationConfig)}
+    for name, expected in QWEN_OPS_DEFAULTS.items():
+        assert native_defaults[name] == expected

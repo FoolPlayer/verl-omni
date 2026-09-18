@@ -16,8 +16,9 @@ NNODES=${NNODES:-2}
 ACTOR_EP=${ACTOR_EP:-8}
 # The 30B model's MoE intermediate size (768) permits rollout TP=1 or 2.
 ROLLOUT_TP=${ROLLOUT_TP:-2}
+# Match VeOmni 0.1.12 GPU ops defaults; use explicit kernel names.
 ATTN_IMPL=${ATTN_IMPL:-flash_attention_2}
-MOE_IMPL=${MOE_IMPL:-fused}
+MOE_IMPL=${MOE_IMPL:-fused_triton}
 
 python3 -m verl_omni.trainer.main_omni \
     model_engine=veomni \
@@ -51,12 +52,22 @@ python3 -m verl_omni.trainer.main_omni \
     actor_rollout_ref.actor.veomni.ulysses_parallel_size=1 \
     actor_rollout_ref.actor.veomni.attn_implementation="${ATTN_IMPL}" \
     actor_rollout_ref.actor.veomni.moe_implementation="${MOE_IMPL}" \
+    actor_rollout_ref.actor.veomni.cross_entropy_loss_implementation=liger_kernel \
+    actor_rollout_ref.actor.veomni.rms_norm_implementation=liger_kernel \
+    actor_rollout_ref.actor.veomni.swiglu_mlp_implementation=liger_kernel \
+    actor_rollout_ref.actor.veomni.rotary_pos_emb_implementation=liger_kernel \
+    actor_rollout_ref.actor.veomni.load_balancing_loss_implementation=triton \
     actor_rollout_ref.actor.veomni.param_offload=true \
     actor_rollout_ref.actor.veomni.optimizer_offload=true \
     actor_rollout_ref.ref.veomni.expert_parallel_size="${ACTOR_EP}" \
     actor_rollout_ref.ref.veomni.ulysses_parallel_size=1 \
-    actor_rollout_ref.ref.veomni.attn_implementation="${ATTN_IMPL}" \
-    actor_rollout_ref.ref.veomni.moe_implementation="${MOE_IMPL}" \
+    'actor_rollout_ref.ref.veomni.attn_implementation=${actor_rollout_ref.actor.veomni.attn_implementation}' \
+    'actor_rollout_ref.ref.veomni.moe_implementation=${actor_rollout_ref.actor.veomni.moe_implementation}' \
+    'actor_rollout_ref.ref.veomni.cross_entropy_loss_implementation=${actor_rollout_ref.actor.veomni.cross_entropy_loss_implementation}' \
+    'actor_rollout_ref.ref.veomni.rms_norm_implementation=${actor_rollout_ref.actor.veomni.rms_norm_implementation}' \
+    'actor_rollout_ref.ref.veomni.swiglu_mlp_implementation=${actor_rollout_ref.actor.veomni.swiglu_mlp_implementation}' \
+    'actor_rollout_ref.ref.veomni.rotary_pos_emb_implementation=${actor_rollout_ref.actor.veomni.rotary_pos_emb_implementation}' \
+    'actor_rollout_ref.ref.veomni.load_balancing_loss_implementation=${actor_rollout_ref.actor.veomni.load_balancing_loss_implementation}' \
     actor_rollout_ref.ref.veomni.param_offload=true \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=2 \
     actor_rollout_ref.rollout.tensor_model_parallel_size="${ROLLOUT_TP}" \
