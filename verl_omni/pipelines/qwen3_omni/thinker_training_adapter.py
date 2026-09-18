@@ -54,8 +54,9 @@ class Qwen3OmniThinkerAdapter(OmniModelBase):
 
     @classmethod
     def configure_veomni_trainable_params(cls, module, model_config) -> None:
-        from .veomni import freeze_modality_towers
+        from .veomni import freeze_modality_towers, validate_thinker_only
 
+        validate_thinker_only(module, cls.get_strip_modules(model_config))
         frozen = freeze_modality_towers(module)
         logger.info("Frozen Qwen3-Omni modality towers before optimizer creation: %s", frozen)
 

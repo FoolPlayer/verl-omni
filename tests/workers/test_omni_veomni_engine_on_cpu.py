@@ -196,6 +196,32 @@ def test_optimizer_excludes_modality_towers(backend_setup):
     assert {id(p) for p in params} == {id(p) for p in model.thinker.model.parameters()}
 
 
+@pytest.mark.parametrize("speech_module", ["talker", "code2wav", "code_predictor", "thinker.code_predictor"])
+def test_optimizer_rejects_speech_modules_even_with_has_talker_false(speech_module, backend_setup):
+    model = torch.nn.Module()
+    model.has_talker = False
+    model.thinker = torch.nn.Module()
+    owner = model.thinker if speech_module.startswith("thinker.") else model
+    setattr(owner, speech_module.rsplit(".", 1)[-1], torch.nn.Linear(2, 2))
+    engine = _engine()
+    engine._get_model_config_path()
+    with patch.object(_BaseEngine, "_build_optimizer") as build_optimizer:
+        with pytest.raises(ValueError, match="Thinker-only.*" + speech_module):
+            engine._build_optimizer(model)
+        build_optimizer.assert_not_called()
+
+
+def test_optimizer_rejects_has_talker_without_visible_speech_module(backend_setup):
+    model = torch.nn.Module()
+    model.has_talker = True
+    engine = _engine()
+    engine._get_model_config_path()
+    with patch.object(_BaseEngine, "_build_optimizer") as build_optimizer:
+        with pytest.raises(ValueError, match="has_talker=True"):
+            engine._build_optimizer(model)
+        build_optimizer.assert_not_called()
+
+
 def test_another_architecture_uses_same_engine_and_replay_hooks(monkeypatch):
     calls = []
 
