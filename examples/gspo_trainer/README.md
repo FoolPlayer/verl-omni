@@ -645,12 +645,44 @@ placeholder tokens sampled into a response from consuming image features.
 Fused expert weights are expanded to per-expert weights during rollout updates.
 
 Defaults use rollout TP=2 and actor EP=8; EP must divide the GPU world size and
-expert count. `MOE_IMPL=fused_triton` selects VeOmni's Triton MoE backend when
-needed. Hydra overrides go last, for example `trainer.total_training_steps=2`
-or `--cfg job` to inspect the composed configuration. The learning-rate
-schedule uses the supported `lr_warmup_steps_ratio` option; evaluation sets
-`temperature=0.0` explicitly. This recipe does not claim numerical equivalence
-to the NPU run in PR #231 or the LoRA curves above.
+expert count. The launcher explicitly selects VeOmni 0.1.12's GPU defaults for
+the Qwen3-relevant operators, overriding verl's conservative eager defaults:
+
+| VeOmni selector | Recipe default |
+| --- | --- |
+| `attn_implementation` | `flash_attention_2` |
+| `moe_implementation` | `fused_triton` |
+| `cross_entropy_loss_implementation` | `liger_kernel` |
+| `rms_norm_implementation` | `liger_kernel` |
+| `swiglu_mlp_implementation` | `liger_kernel` |
+| `rotary_pos_emb_implementation` | `liger_kernel` |
+| `load_balancing_loss_implementation` | `triton` |
+
+Set these under `actor_rollout_ref.actor.veomni`. Reference operator selectors
+interpolate the actor's values, including CLI overrides; explicitly overriding
+`actor_rollout_ref.ref.veomni.<selector>` still takes precedence. For example:
+
+```bash
+bash examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_veomni.sh \
+    actor_rollout_ref.actor.veomni.moe_implementation=fused_quack
+```
+
+`MOE_IMPL` and `ATTN_IMPL` are optional launcher conveniences for the same fields.
+Use explicit `fused_triton` / `fused_quack` names instead of VeOmni's deprecated
+`fused` alias. Both GPU smoke scripts use the same operator defaults; the backend
+check builds its CPU checkpoint with eager ops only to generate the fixture.
+
+`model.use_fused_kernels=true` is verl's RL output-path switch: its VeOmni engine
+passes `return_log_probs=True`, temperature and pre-shifted labels to the model.
+It does not select the MoE, norm or CE implementation. VeOmni's non-eager CE
+path avoids materializing the full logits tensor before computing chunked
+log-probabilities; selecting `cross_entropy_loss_implementation=eager` may still
+materialize logits. The adapter adds no new operator-selection mapping.
+
+Hydra overrides go last, for example `trainer.total_training_steps=2` or
+`--cfg job` to inspect the composed configuration. The learning-rate schedule
+uses `lr_warmup_steps_ratio`; evaluation sets `temperature=0.0` explicitly. This
+recipe does not claim numerical equivalence to PR #231 or the LoRA curves above.
 
 Two-GPU end-to-end smoke test (tiny random checkpoint, no external model download):
 

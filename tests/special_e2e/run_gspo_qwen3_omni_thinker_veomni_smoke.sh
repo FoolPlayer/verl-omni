@@ -6,7 +6,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 export MODEL_PATH=${MODEL_PATH:-${HOME}/models/tiny-random/Qwen3-Omni-VeOmni}
 DATA_DIR=${DATA_DIR:-${HOME}/data/math}
 export NUM_GPUS=${NUM_GPUS:-2}
-export NNODES=1 ACTOR_EP=1 ROLLOUT_TP=2 ATTN_IMPL=sdpa MOE_IMPL=eager
+# Inherit the launcher's ops defaults (including fused_triton and Liger).
+export NNODES=1 ACTOR_EP=1 ROLLOUT_TP=2
 
 python3 "${REPO_ROOT}/tests/special_e2e/build_qwen3_omni_tiny_random.py" \
     --output-dir "${MODEL_PATH}" --force

@@ -61,7 +61,7 @@ def _build_checkpoint(path):
     model.save_pretrained(path)
 
 
-def run(path: Path, moe_implementation: str):
+def run(path: Path, moe_implementation: str, attn_implementation: str):
     """Exercise the real sharded engine with image inputs on only one rank."""
     rank = dist.get_rank()
     if rank == 0:
@@ -81,10 +81,20 @@ def run(path: Path, moe_implementation: str):
         enable_gradient_checkpointing=True,
         enable_activation_offload=False,
     )
+    # Use VeOmni's native defaults rather than verl's conservative eager
+    # defaults for the Qwen3 ops. The CPU checkpoint fixture above is separate.
+    ops = OpsImplementationConfig(attn_implementation=attn_implementation, moe_implementation=moe_implementation)
     engine = OmniVeOmniEngine(
         model_config=model_config,
         engine_config=VeOmniEngineConfig(
-            expert_parallel_size=2, attn_implementation="sdpa", moe_implementation=moe_implementation
+            expert_parallel_size=2,
+            attn_implementation=attn_implementation,
+            moe_implementation=ops.moe_implementation,
+            cross_entropy_loss_implementation=ops.cross_entropy_loss_implementation,
+            rms_norm_implementation=ops.rms_norm_implementation,
+            swiglu_mlp_implementation=ops.swiglu_mlp_implementation,
+            rotary_pos_emb_implementation=ops.rotary_pos_emb_implementation,
+            load_balancing_loss_implementation=ops.load_balancing_loss_implementation,
         ),
         optimizer_config=VeOmniOptimizerConfig(lr=1e-5, total_training_steps=2),
         checkpoint_config=CheckpointConfig(),
@@ -141,6 +151,7 @@ def main():
     """Run on exactly two local GPUs, cleaning up the temporary checkpoint."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--moe-implementation", default="fused_triton")
+    parser.add_argument("--attn-implementation", default="flash_attention_2")
     args = parser.parse_args()
     torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
     dist.init_process_group("nccl")
@@ -151,7 +162,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix="qwen3-veomni-smoke-") as local_dir:
             shared = [local_dir if dist.get_rank() == 0 else None]
             dist.broadcast_object_list(shared, src=0)
-            run(Path(shared[0]) / "model", args.moe_implementation)
+            run(Path(shared[0]) / "model", args.moe_implementation, args.attn_implementation)
             dist.barrier()
     finally:
         dist.destroy_process_group()
