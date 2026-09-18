@@ -32,6 +32,7 @@ from veomni.arguments import OpsImplementationConfig
 from veomni.distributed.parallel_state import init_parallel_state
 from veomni.models.auto import build_foundation_model
 from verl.trainer.config import CheckpointConfig
+from verl.utils import tensordict_utils as tu
 from verl.workers.config import VeOmniEngineConfig, VeOmniOptimizerConfig
 
 from verl_omni.workers.engine.veomni.omni_impl import OmniVeOmniEngine
@@ -40,6 +41,10 @@ from verl_omni.workers.engine.veomni.omni_impl import OmniVeOmniEngine
 def _build_checkpoint(path):
     """Save a random Thinker with four experts per layer and in-vocabulary image IDs."""
     config = _build_tiny_config(256)
+    # Exercise the Instruct config contract, rather than disabling speech in
+    # the fixture and then merely asserting that it stayed disabled.
+    config.enable_audio_output = True
+    config.enable_talker = True
     thinker = config.thinker_config
     thinker.image_token_id, thinker.video_token_id, thinker.audio_token_id = 100, 101, 102
     thinker.text_config.pad_token_id = 0
@@ -58,7 +63,18 @@ def _build_checkpoint(path):
         ),
         init_device="cpu",
     )
-    model.save_pretrained(path)
+    assert not model.has_talker
+    state = model.state_dict()
+    state.update(
+        {
+            "talker.fixture.weight": torch.ones(2, 2),
+            "talker.code_predictor.fixture.weight": torch.ones(2, 2),
+            "code2wav.fixture.weight": torch.ones(2, 2),
+        }
+    )
+    # Check VeOmni's strict state-dict hook and its actual checkpoint loader.
+    model.load_state_dict(state, strict=True)
+    model.save_pretrained(path, state_dict=state)
 
 
 def run(path: Path, moe_implementation: str, attn_implementation: str):
@@ -69,6 +85,7 @@ def run(path: Path, moe_implementation: str, attn_implementation: str):
         _build_checkpoint(path)
     dist.barrier()
     config = AutoConfig.from_pretrained(path)
+    assert config.enable_audio_output and config.enable_talker
     model_config = SimpleNamespace(
         architecture=config.architectures[0],
         hf_config=config,
@@ -101,34 +118,76 @@ def run(path: Path, moe_implementation: str, attn_implementation: str):
     )
     engine._build_model_optimizer()
     assert not engine.module.has_talker
-    for step in range(2):
+    assert not any(
+        name.rsplit(".", 1)[-1] in {"talker", "code2wav", "code_predictor"} for name, _ in engine.module.named_modules()
+    )
+    expected_params = {id(p) for name, p in engine.module.named_parameters() if p.requires_grad}
+    assert all(name.startswith("thinker.") for name, p in engine.module.named_parameters() if p.requires_grad)
+    optimizer_params = {
+        id(p)
+        for optimizer in engine.optimizer.optimizers_dict.values()
+        for group in optimizer.param_groups
+        for p in group["params"]
+    }
+    assert optimizer_params == expected_params
+    print(f"PASS rank={rank} speech-enabled checkpoint: Thinker-only optimizer", flush=True)
+    for step, temperature in enumerate((1.0, 0.8)):
         # The response also contains image_token_id; it must remain ordinary text.
         ids = torch.tensor([[10, 100 if rank == 0 else 11, 12, 100, 13, 14]], device="cuda")
+        offsets = torch.tensor([0, ids.numel()], device=ids.device)
         batch = TensorDict(
             {
                 "input_ids": torch.nested.as_nested_tensor([ids[0]], layout=torch.jagged),
+                "position_ids": torch.nested.nested_tensor_from_jagged(
+                    torch.arange(6, device=ids.device).expand(3, 6).contiguous(), offsets, jagged_dim=2
+                ),
                 "response_mask": torch.nested.as_nested_tensor([torch.ones(3, device=ids.device)], layout=torch.jagged),
             },
             batch_size=1,
         )
-        inputs = {
-            "input_ids": ids,
-            "position_ids": torch.arange(6, device=ids.device).view(1, 1, 6).expand(3, 1, 6),
-            "use_cache": False,
-        }
         if rank == 0:
-            inputs.update(
-                pixel_values=torch.randn(4, 3 * 2 * 16 * 16, device=ids.device, dtype=torch.bfloat16),
-                image_grid_thw=torch.tensor([[1, 2, 2]], device=ids.device),
+            tu.assign_non_tensor(
+                batch,
+                multi_modal_inputs=[
+                    {
+                        "pixel_values": torch.randn(4, 3 * 2 * 16 * 16, device=ids.device, dtype=torch.bfloat16),
+                        "image_grid_thw": torch.tensor([[1, 2, 2]], device=ids.device),
+                    }
+                ],
             )
-        engine._apply_veomni_input_transforms(inputs, batch)
-        output = engine.module(**inputs, labels=ids, shift_labels=ids.roll(-1, dims=-1), return_log_probs=True)
-        loss = -output.log_probs[..., 3:].mean()
+        tu.assign_non_tensor(
+            batch, use_fused_kernels=False, use_remove_padding=True, temperature=temperature, calculate_entropy=True
+        )
+        # Use the production batch flag -> inputs -> outputs path in both modes.
+        # Disable dropout so the comparison isolates the LM output protocol.
+        engine.module.eval()
+        with torch.no_grad():
+            inputs, output_args = engine.prepare_model_inputs(batch)
+            output = engine.module(**inputs, use_cache=False)
+            scalar_reference = (output.logits / temperature).float().log_softmax(-1)
+            scalar_reference = scalar_reference.gather(-1, ids.roll(-1, dims=-1).unsqueeze(-1)).view(-1)
+            reference = engine.prepare_model_outputs(output, output_args, batch, logits_processor_func=None)
+        tu.assign_non_tensor(batch, use_fused_kernels=True)
+        inputs, output_args = engine.prepare_model_inputs(batch)
+        assert inputs["return_log_probs"] is True
+        assert inputs["temperature"] == temperature
+        torch.testing.assert_close(inputs["shift_labels"], ids.roll(-1, dims=-1))
+        output = engine.module(**inputs, use_cache=False)
+        processed = engine.prepare_model_outputs(output, output_args, batch, logits_processor_func=None)
+        for key in ("log_probs", "entropy"):
+            # Fused reductions return FP32; the logits path may retain BF16.
+            torch.testing.assert_close(
+                processed[key].values().float(), reference[key].values().float(), atol=0.03, rtol=0.01
+            )
+        torch.testing.assert_close(processed["log_probs"].values(), scalar_reference, atol=0.03, rtol=0.01)
+        print(f"PASS rank={rank} fused log_probs/entropy vs logits: temperature={temperature}", flush=True)
+        loss = -processed["log_probs"].values()[3:].mean()
         loss.backward()
         assert all(p.grad is None for p in engine.module.thinker.visual.parameters())
         grad_norm = engine.optimizer_step()
         engine.optimizer.zero_grad()
         engine.lr_scheduler.step()
+        engine.module.train()
         assert torch.isfinite(loss) and torch.isfinite(torch.tensor(grad_norm))
         print(f"PASS rank={rank} step={step} loss={loss.item():.6f} grad_norm={grad_norm:.6f}", flush=True)
 

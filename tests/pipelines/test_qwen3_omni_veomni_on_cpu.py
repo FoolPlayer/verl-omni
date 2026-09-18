@@ -204,3 +204,21 @@ def test_causal_mask_shim_drops_only_cache_position():
         assert not adapter.patch_veomni_causal_mask_kwargs()
         with pytest.raises(TypeError):
             modeling.create_causal_mask(config=1, inputs_embeds=2, unknown=True)
+
+
+def test_causal_mask_shim_leaves_compatible_signature_unchanged():
+    def create_causal_mask(config, inputs_embeds, cache_position=None):
+        return config, inputs_embeds, cache_position
+
+    modeling = SimpleNamespace(create_causal_mask=create_causal_mask)
+    with patch.dict(
+        sys.modules,
+        {
+            "transformers.masking_utils": SimpleNamespace(create_causal_mask=create_causal_mask),
+            "veomni.models.transformers.qwen3_omni_moe.generated": SimpleNamespace(
+                patched_modeling_qwen3_omni_moe_gpu=modeling
+            ),
+        },
+    ):
+        assert not adapter.patch_veomni_causal_mask_kwargs()
+        assert modeling.create_causal_mask is create_causal_mask

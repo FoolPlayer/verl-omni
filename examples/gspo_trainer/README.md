@@ -684,19 +684,40 @@ Hydra overrides go last, for example `trainer.total_training_steps=2` or
 uses `lr_warmup_steps_ratio`; evaluation sets `temperature=0.0` explicitly. This
 recipe does not claim numerical equivalence to PR #231 or the LoRA curves above.
 
+The two scripts below are manual validation tools. They are not registered in
+the required `ci-e2e-omni` group until both complete through normal package
+initialization on the pinned vLLM 0.28 / PyTorch 2.13 stack. Backend-only results
+on PyTorch 2.11 do not establish full V1 rollout compatibility.
+
 Two-GPU end-to-end smoke test (tiny random checkpoint, no external model download):
 
 ```bash
 bash tests/special_e2e/run_gspo_qwen3_omni_thinker_veomni_smoke.sh
 ```
 
-The backend check also exercises image inputs on one rank while another rank
-receives text, two optimizer updates with EP=2, and exact agreement of exported
-weights across ranks:
+The backend check loads a speech-enabled config with extra Talker/Codec
+checkpoint keys and verifies a Thinker-only optimizer. It compares the actual
+`use_fused_kernels` input/output path against logits for log-probabilities and
+entropy at temperatures 1.0 and 0.8, with images on one rank and text on the
+other. It also checks two optimizer updates with EP=2 and exact agreement of
+exported weights across ranks:
 
 ```bash
 torchrun --standalone --nproc_per_node=2 tests/special_e2e/check_qwen3_omni_veomni_backend.py
 ```
+
+The adapter rejects a loaded model containing `talker`, `code2wav`, or
+`code_predictor` (or reporting `has_talker=True`) before optimizer construction.
+It uses the same excluded-module names as the FSDP adapter. VeOmni 0.1.12's
+default modeling constructs only the Thinker even with speech enabled in the
+checkpoint config; the runtime check protects against a different backend or
+release changing that behavior.
+
+The `create_causal_mask` shim is version-sensitive: it adapts VeOmni 0.1.12's
+generated GPU model to the Transformers signature without `cache_position`,
+validated with Transformers 5.14.1. It leaves signatures that still accept the
+argument unchanged and does not suppress errors for other unknown arguments.
+Recheck this shim whenever VeOmni or Transformers is upgraded.
 
 ## Logging
 

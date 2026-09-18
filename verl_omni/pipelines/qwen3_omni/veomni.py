@@ -57,6 +57,10 @@ def patch_veomni_causal_mask_kwargs() -> bool:
     log-prob and training pass. Rebind the module-level symbol to a wrapper that
     removes only the obsolete ``cache_position`` argument.
 
+    This shim is specific to VeOmni 0.1.12's generated GPU model and was
+    validated with Transformers 5.14.1. Recheck it when either dependency is
+    upgraded; it is not a general compatibility layer for other signatures.
+
     Returns True when the shim was installed, False when it is unnecessary.
     """
 
@@ -140,12 +144,29 @@ def build_modality_masks(
     return masks
 
 
+def validate_thinker_only(module: torch.nn.Module, excluded_modules: Iterable[str]) -> None:
+    """Reject speech-generation modules before constructing the optimizer.
+
+    VeOmni 0.1.12 builds only the Thinker even for Instruct configs. Check the
+    loaded graph as well, so a different modeling backend or future release
+    cannot silently include speech-generation parameters in training.
+    """
+    excluded = set(excluded_modules)
+    present = [name for name, _ in module.named_modules() if name.rsplit(".", 1)[-1] in excluded]
+    if getattr(module, "has_talker", False) or present:
+        raise ValueError(
+            "Qwen3-Omni VeOmni requires a Thinker-only model before optimizer creation; "
+            f"found has_talker={getattr(module, 'has_talker', False)}, speech modules={present}. "
+            "Use VeOmni's Thinker-only modeling backend."
+        )
+
+
 def freeze_modality_towers(module: torch.nn.Module) -> tuple[str, ...]:
     """Freeze the encoder towers, while training the full text backbone.
 
     The vision tower still runs in the forward pass for image inputs; freezing
-    only keeps its parameters out of the optimizer so both backends optimize the
-    same parameter set.
+    only keeps its parameters out of the optimizer. The adapter validates the
+    Thinker-only graph separately before calling this helper.
     """
 
     thinker = getattr(module, "thinker", module)
