@@ -109,10 +109,11 @@ python -c "import veomni; print('veomni', veomni.__version__)"
 python -c "from veomni.distributed.offloading import load_model_to_gpu, load_optimizer, offload_model_to_cpu, offload_optimizer; print('VeOmni offloading helpers OK')"
 ```
 
-The two-GPU Thinker backend check passes with torch 2.13, including forward,
-backward, optimizer updates and EP weight export. The base import/offloading
-checks above do not exercise those paths. A full VeOmni-engine V1 rollout run
-on the vLLM 0.28 stack remains pending validation.
+The two-GPU Thinker backend check and two-step V1 smoke pass with torch 2.13
+and vLLM 0.28, including forward, backward, optimizer updates, EP weight export
+and full-weight rollout synchronization. These checks use tiny random weights;
+they do not validate the full 30B checkpoint or convergence. The base
+import/offloading checks above do not exercise these training paths.
 The complete `veomni[gpu]` extra belongs in a separate environment compatible
 with its torch pin; on the vLLM stack, install the required kernels individually.
 
@@ -180,6 +181,8 @@ python -c "import vllm_omni; import verl_omni; print('Full package imports OK')"
 Imports do not exercise GPU execution. Before treating the stack as validated,
 run both the backend check and the complete V1 smoke through normal package
 initialization, as described in the [recipe](../../examples/gspo_trainer/README.md#veomni-full-parameter-thinker-training).
+The smoke allows 1800 seconds for rollout startup because a cold FlashInfer
+kernel build on GB200 can exceed vLLM-Omni's default 600-second timeout.
 
 ## Post-Installation Verification
 

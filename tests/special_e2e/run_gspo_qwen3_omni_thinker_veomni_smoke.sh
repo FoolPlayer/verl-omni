@@ -17,6 +17,7 @@ fi
 
 TRAIN_FILE="${DATA_DIR}/train.parquet" VAL_FILE="${DATA_DIR}/test.parquet" \
 bash "${REPO_ROOT}/examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_veomni.sh" \
+    data.dataloader_num_workers=0 \
     data.train_batch_size=4 \
     data.max_prompt_length=256 \
     data.max_response_length=128 \
@@ -29,6 +30,8 @@ bash "${REPO_ROOT}/examples/gspo_trainer/qwen3_omni/run_qwen3_omni_thinker_gspo_
     actor_rollout_ref.rollout.gpu_memory_utilization=0.4 \
     actor_rollout_ref.rollout.max_num_seqs=16 \
     actor_rollout_ref.rollout.enforce_eager=true \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm_omni.stage_init_timeout=1800 \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm_omni.init_timeout=1800 \
     reward.custom_reward_function.path=null \
     trainer.val_before_train=false \
     trainer.test_freq=1 \

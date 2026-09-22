@@ -684,10 +684,11 @@ Hydra overrides go last, for example `trainer.total_training_steps=2` or
 uses `lr_warmup_steps_ratio`; evaluation sets `temperature=0.0` explicitly. This
 recipe does not claim numerical equivalence to PR #231 or the LoRA curves above.
 
-The two scripts below are manual validation tools. They are not registered in
-the required `ci-e2e-omni` group until both complete through normal package
-initialization on the pinned vLLM 0.28 / PyTorch 2.13 stack. Backend-only results
-on PyTorch 2.11 do not establish full V1 rollout compatibility.
+The two scripts below passed through normal package initialization on two
+GB200 GPUs with PyPI VeOmni 0.1.12 and the pinned vLLM 0.28 / PyTorch 2.13
+stack. They remain manual validation tools outside the required
+`ci-e2e-omni` group. These tiny-checkpoint checks validate training and weight
+transfer mechanics, not 30B-model convergence.
 
 Two-GPU end-to-end smoke test (tiny random checkpoint, no external model download):
 
