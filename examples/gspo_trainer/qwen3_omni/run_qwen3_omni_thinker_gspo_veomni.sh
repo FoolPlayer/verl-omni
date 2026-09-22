@@ -36,8 +36,10 @@ python3 -m verl_omni.trainer.main_omni \
     actor_rollout_ref.model.use_fused_kernels=true \
     actor_rollout_ref.model.enable_gradient_checkpointing=true \
     actor_rollout_ref.actor.optim.lr=2e-6 \
-    actor_rollout_ref.actor.optim.lr_scheduler_type=constant \
-    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.05 \
+    actor_rollout_ref.actor.optim.lr_scheduler_type=cosine \
+    actor_rollout_ref.actor.optim.lr_warmup_steps_ratio=0.0 \
+    actor_rollout_ref.actor.optim.lr_min=0.0 \
+    actor_rollout_ref.actor.optim.lr_decay_ratio=1.0 \
     actor_rollout_ref.actor.optim.weight_decay=0.1 \
     actor_rollout_ref.actor.ppo_mini_batch_size=32 \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=1 \

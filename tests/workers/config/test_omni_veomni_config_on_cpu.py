@@ -103,8 +103,11 @@ def test_launcher_composes_actor_and_reference_as_veomni(tmp_path, actor_module)
     assert config.actor_rollout_ref.model.lora_rank == 0
     assert config.actor_rollout_ref.model.use_fused_kernels
     assert config.actor_rollout_ref.rollout.layered_summon is False
-    assert actor.optim.lr_scheduler_type == "constant"
-    assert actor.optim.lr_warmup_steps_ratio == pytest.approx(0.05)
+    assert actor.optim.lr == pytest.approx(2e-6)
+    assert actor.optim.lr_scheduler_type == "cosine"
+    assert actor.optim.lr_warmup_steps_ratio == 0.0
+    assert actor.optim.lr_min == 0.0
+    assert actor.optim.lr_decay_ratio == 1.0
     assert config.actor_rollout_ref.rollout.val_kwargs.temperature == 0.0
     assert config.ray_kwargs.ray_init.runtime_env.env_vars.VERL_USE_EXTERNAL_MODULES == "verl_omni"
 

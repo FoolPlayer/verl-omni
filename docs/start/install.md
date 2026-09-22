@@ -180,7 +180,7 @@ python -c "import vllm_omni; import verl_omni; print('Full package imports OK')"
 
 Imports do not exercise GPU execution. Before treating the stack as validated,
 run both the backend check and the complete V1 smoke through normal package
-initialization, as described in the [recipe](../../examples/gspo_trainer/README.md#veomni-full-parameter-thinker-training).
+initialization, as described in the [omni integration guide](../contributing/integrating_an_omni_model.md#veomni-backend-optional).
 The smoke allows 1800 seconds for rollout startup because a cold FlashInfer
 kernel build on GB200 can exceed vLLM-Omni's default 600-second timeout.
 
