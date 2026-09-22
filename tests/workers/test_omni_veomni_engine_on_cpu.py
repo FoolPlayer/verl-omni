@@ -107,9 +107,11 @@ def _engine(architecture="Qwen3OmniMoeForConditionalGeneration"):
             thinker_config=SimpleNamespace(image_token_id=151655, video_token_id=151656, audio_token_id=151675),
         ),
         model_stage="thinker",
+        trainer_type="policy_gradient",
         use_remove_padding=True,
         lora_rank=0,
         lora={},
+        lora_adapter_path=None,
         local_hf_config_path="checkpoint",
     )
     engine.engine_config = SimpleNamespace(ulysses_parallel_size=1)
@@ -172,6 +174,8 @@ def test_engine_requires_prompt_boundaries(backend_setup):
         ("model_config", "model_stage", "talker"),
         ("model_config", "lora_rank", 8),
         ("model_config", "lora", {"rank": 8}),
+        ("model_config", "lora_adapter_path", "existing-adapter"),
+        ("model_config", "trainer_type", "direct_preference"),
         ("model_config", "use_remove_padding", False),
         ("engine_config", "ulysses_parallel_size", 2),
     ],

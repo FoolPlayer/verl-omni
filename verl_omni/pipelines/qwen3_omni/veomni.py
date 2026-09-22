@@ -225,12 +225,24 @@ def setup_backend(model_config, engine_config) -> None:
     """Validate the Thinker backend and install its optional integrations."""
     if model_config.hf_config.model_type != _MODEL_TYPE or model_config.model_stage != "thinker":
         raise NotImplementedError("The Qwen3-Omni VeOmni adapter supports the Thinker stage only.")
+    if getattr(model_config, "trainer_type", "policy_gradient") != "policy_gradient":
+        raise NotImplementedError(
+            "Qwen3-Omni Thinker with VeOmni supports policy_gradient training only; "
+            "direct_preference batches do not provide the required response boundaries."
+        )
     if engine_config.ulysses_parallel_size != 1:
         raise NotImplementedError("Qwen3-Omni Thinker with VeOmni requires ulysses_parallel_size=1.")
     if not model_config.use_remove_padding:
         raise NotImplementedError("Qwen3-Omni Thinker with VeOmni requires use_remove_padding=True.")
-    if model_config.lora_rank > 0 or model_config.lora.get("rank", 0) > 0:
-        raise NotImplementedError("Qwen3-Omni Thinker with VeOmni supports full-parameter training only.")
+    if (
+        model_config.lora_rank > 0
+        or model_config.lora.get("rank", 0) > 0
+        or getattr(model_config, "lora_adapter_path", None) is not None
+    ):
+        raise NotImplementedError(
+            "Qwen3-Omni Thinker with VeOmni supports full-parameter training only; "
+            "LoRA ranks and lora_adapter_path are not supported."
+        )
 
     from verl.workers.engine.veomni.utils import MOE_PARAM_HANDERS
 

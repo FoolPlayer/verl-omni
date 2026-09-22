@@ -713,6 +713,11 @@ default modeling constructs only the Thinker even with speech enabled in the
 checkpoint config; the runtime check protects against a different backend or
 release changing that behavior.
 
+The Qwen3 adapter currently supports policy-gradient batches only. It rejects
+`direct_preference` before loading the model because offline DPO batches use a
+different response-boundary contract. LoRA ranks and `lora_adapter_path` are
+also rejected, including a nonempty adapter path with the default rank of zero.
+
 The `create_causal_mask` shim is version-sensitive: it adapts VeOmni 0.1.12's
 generated GPU model to the Transformers signature without `cache_position`,
 validated with Transformers 5.14.1. It leaves signatures that still accept the
