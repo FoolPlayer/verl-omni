@@ -16,6 +16,7 @@
 
 import importlib.util
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -35,13 +36,23 @@ def _load_source(name, path):
     return module
 
 
+@contextmanager
+def _patch_modules(modules):
+    # Restore only our stubs. Restoring all of sys.modules also unloads native
+    # extensions imported inside the context, which may not support reloading.
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        for name, module in modules.items():
+            monkeypatch.setitem(sys.modules, name, module)
+        yield
+
+
 # Keep the real registry and model hooks, isolating package __init__ imports
 # that would otherwise load all rollout engines during CPU test collection.
-with patch.dict(sys.modules, {"verl_omni.workers.config": SimpleNamespace(DiffusionModelConfig=object)}):
+with _patch_modules({"verl_omni.workers.config": SimpleNamespace(DiffusionModelConfig=object)}):
     _model_base = _load_source("omni_model_base_test", "verl_omni/pipelines/model_base.py")
 OmniModelBase = _model_base.OmniModelBase
 qwen_backend = _load_source(_QWEN_BACKEND, "verl_omni/pipelines/qwen3_omni/veomni.py")
-with patch.dict(sys.modules, {"verl_omni.pipelines.model_base": _model_base}):
+with _patch_modules({"verl_omni.pipelines.model_base": _model_base}):
     _qwen_adapter = _load_source(
         "verl_omni.pipelines.qwen3_omni.thinker_training_adapter",
         "verl_omni/pipelines/qwen3_omni/thinker_training_adapter.py",
@@ -70,8 +81,7 @@ _registry.register.return_value = lambda cls: cls
 _path = Path(__file__).resolve().parents[2] / "verl_omni/workers/engine/veomni/omni_impl.py"
 _spec = importlib.util.spec_from_file_location("omni_veomni_test_engine", _path)
 _engine_module = importlib.util.module_from_spec(_spec)
-with patch.dict(
-    sys.modules,
+with _patch_modules(
     {
         "verl_omni.pipelines.model_base": _model_base,
         "verl.workers.engine.base": SimpleNamespace(EngineRegistry=_registry),
@@ -87,8 +97,7 @@ def backend_setup():
     handlers = {}
     with (
         patch.object(qwen_backend, "patch_veomni_causal_mask_kwargs") as compat,
-        patch.dict(
-            sys.modules,
+        _patch_modules(
             {
                 "verl.workers.engine.veomni.utils": SimpleNamespace(MOE_PARAM_HANDERS=handlers),
                 _QWEN_BACKEND: qwen_backend,
@@ -312,7 +321,7 @@ def test_native_qwen_adapter_does_not_require_veomni():
     model.talker = torch.nn.Linear(2, 2)
     model.code2wav = torch.nn.Linear(2, 2)
     model.code_predictor = torch.nn.Linear(2, 2)
-    with patch.dict(sys.modules, {_QWEN_BACKEND: None, "veomni": None}):
+    with _patch_modules({_QWEN_BACKEND: None, "veomni": None}):
         configured = Qwen3OmniThinkerAdapter.configure_model(model, _engine().model_config)
     assert configured is model
     assert configured.forward() == "thinker output"
