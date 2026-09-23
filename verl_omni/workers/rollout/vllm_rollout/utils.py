@@ -209,8 +209,19 @@ class vLLMOmniColocateWorkerExtension(CustomPipelineWorkerExtension):
                     restore_moe_param_layout,
                 )
 
-                if _is_npu_platform():
-                    restore_moe_param_layout(model, model_config.hf_text_config.hidden_size)
+                is_npu = _is_npu_platform()
+                # Use checkpoint-layout restoration for packed MoE weights.
+                # Dense omni loaders may copy auxiliary encoder buffers and
+                # derive runtime tensors inside load_weights; turning those
+                # tensors into meta placeholders breaks their loading contract.
+                has_moe = False
+                if not is_npu:
+                    from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
+
+                    has_moe = any(isinstance(layer, RoutedExperts) for layer in model.modules())
+                if is_npu or not has_moe:
+                    if is_npu:
+                        restore_moe_param_layout(model, model_config.hf_text_config.hidden_size)
                     receiver.receive_weights(
                         on_bucket_received=lambda weights, *args, **kwargs: model.load_weights(weights)
                     )
